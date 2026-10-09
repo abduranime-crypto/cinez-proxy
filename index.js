@@ -1,54 +1,77 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const cheerio = require('cheerio'); // Yeh website ka HTML parse karega
 
 const app = express();
 app.use(cors());
 
-// THE REAL CINEZ ENGINE (No Test Videos)
-app.get('/api/get-link', async (req, res) => {
-    const { id, s, e } = req.query; // id=1668, s=1, e=1
-    
-    if (!id || !s || !e) {
-        return res.status(400).json({ error: "Missing parameters" });
-    }
+// THE "CASTLE-STYLE" DIRECT EXTRACTOR
+app.get('/api/extract', async (req, res) => {
+    const { id, s, e } = req.query; // TMDB ID, Season, Episode
+
+    if (!id || !s || !e) return res.status(400).json({ error: "Parameters missing bhai" });
+
+    console.log(`[EXTRACTOR] Hunting S${s} E${e} for TMDB: ${id}`);
 
     try {
-        console.log(`[REAL ENGINE] Fetching Show ID: ${id} | S${s} E${e}`);
+        // STEP 1: Bhes Badal Kar Jana (Spoofing)
+        // Hum Vidsrc ko dikhayenge ki hum koi bot nahi, balki ek real Windows Google Chrome user hain.
+        const targetUrl = `https://vidsrc.net/embed/tv?tmdb=${id}&season=${s}&episode=${e}`;
         
-        // STEP 1: Consumet TMDB Provider se show ki info nikalo
-        const searchUrl = `https://api.consumet.org/meta/tmdb/info/${id}?type=tv`;
-        const { data } = await axios.get(searchUrl, { timeout: 8000 });
+        const response = await axios.get(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Referer': 'https://google.com/'
+            }
+        });
+
+        // STEP 2: HTML ko Cheerio (Parser) mein load karna
+        const $ = cheerio.load(response.data);
         
-        // STEP 2: Sahi episode ka ID dhundo
-        const episode = data.episodes?.find(ep => ep.season == s && ep.number == e);
-        if (!episode) throw new Error("Episode not found in API");
-
-        // STEP 3: Episode ID se Raw m3u8 Link nikalo
-        const watchUrl = `https://api.consumet.org/meta/tmdb/watch/${episode.id}?id=${id}`;
-        const watchRes = await axios.get(watchUrl, { timeout: 8000 });
-
-        if (watchRes.data.sources && watchRes.data.sources.length > 0) {
-            // Quality filter (Auto ya 1080p dhundo)
-            const bestSource = watchRes.data.sources.find(src => src.quality === 'auto' || src.quality === '1080p') || watchRes.data.sources[0];
-            
-            return res.json({ 
-                success: true, 
-                provider: "Consumet_TMDB", 
-                sources: [{ url: bestSource.url }] 
-            });
+        // STEP 3: Page ke andar hidden elements dhundna
+        // Vidsrc aksar apna player ek iframe ke andar chhipata hai. Hum usko dhund rahe hain.
+        let iframeUrl = $('iframe').attr('src');
+        
+        // Agar iframe nahi mila, toh ho sakta hai unhone javascript ('token') ke andar link chhipaya ho.
+        let secretToken = null;
+        if (!iframeUrl) {
+            const pageScripts = $('script').text();
+            // Regex se token dhundne ki koshish
+            const tokenMatch = pageScripts.match(/data-hash=['"]([^'"]+)['"]/);
+            if(tokenMatch) {
+                secretToken = tokenMatch[1];
+            }
         }
-        
-        throw new Error("No playable sources found");
+
+        // Fix relative URLs (agar link // se shuru hota hai)
+        if (iframeUrl && iframeUrl.startsWith('//')) {
+            iframeUrl = 'https:' + iframeUrl;
+        }
+
+        // STEP 4: Asliyat dikhana
+        // Yahan par Castle jaise apps us secretToken ko decrypt (AES/RC4) karke .m3u8 nikalte hain.
+        res.json({
+            success: true,
+            message: "Scraping Operation Successful!",
+            target_hit: targetUrl,
+            extracted_data: {
+                raw_iframe: iframeUrl || "No Iframe Found",
+                encrypted_token: secretToken || "No Token Found"
+            },
+            next_step: "Is iframe ya token ko decrypt karke HLS link nikalna hoga."
+        });
 
     } catch (error) {
-        console.error("[ENGINE FAILED]", error.message);
-        // TEST VIDEO HATA DI HAI! Ab seedha error aayega taaki Iframes kaam karein.
-        res.status(500).json({ success: false, error: "Raw link extraction failed. Boot Iframes!" });
+        console.error("[SCRAPE FAILED]", error.message);
+        res.status(500).json({ 
+            success: false, 
+            error: "Scraping Blocked! Cloudflare ne bot pakad liya ya IP ban kar di." 
+        });
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`CineZ Live Server running on port ${PORT}`);
+    console.log(`CineZ Direct Extractor running on port ${PORT}`);
 });

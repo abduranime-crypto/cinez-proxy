@@ -1,96 +1,68 @@
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-// Asli Sudo-Flix / Movie-Web Engine import kar rahe hain
-const { makeProviders, makeStandardFetcher } = require('@movie-web/providers');
+import express from 'express';
+import cors from 'cors';
+import { makeProviders, makeStandardFetcher } from '@movie-web/providers';
 
 const app = express();
 app.use(cors());
 
-// Movie-Web Engine Setup
+// Vercel server-side fetcher setup
 const fetcher = makeStandardFetcher(fetch);
 const providers = makeProviders({
     fetcher,
-    target: 'any', // Vercel (server) par chala rahe hain
+    target: 'server',
 });
 
-app.get('/api/scrape', async (req, res) => {
-    const { id, s, e } = req.query; // example: id=1668, s=1, e=1
+// Root check
+app.get('/', (req, res) => {
+    res.json({ status: "CineZ Vercel Engine is Online!" });
+});
 
-    if (!id || !s || !e) {
-        return res.status(400).json({ error: "Missing id, s, or e" });
+// Scraper Endpoint
+app.get('/api/stream', async (req, res) => {
+    const { id, s, e, imdb } = req.query; // s=season, e=episode, imdb=tt0108778
+
+    if (!s || !e) {
+        return res.status(400).json({ error: "Season and Episode required!" });
     }
 
     try {
-        console.log(`[MOVIE-WEB ENGINE] Starting attack on TMDB: ${id} | S${s} E${e}`);
+        console.log(`[VERCEL ENGINE] Request received for S${s} E${e} (IMDb: ${imdb || id})`);
 
-        // STEP 1: Movie-Web ko exact IDs chahiye hoti hain. TMDB se nikalte hain.
-        // TMDB ka free API key (publicly available for scraping tools)
-        const tmdbUrl = `https://api.themoviedb.org/3/tv/${id}/season/${s}/episode/${e}?api_key=8d6d91941230817f7807d643736e8a49`;
-        const showUrl = `https://api.themoviedb.org/3/tv/${id}?api_key=8d6d91941230817f7807d643736e8a49`;
-
-        const [epRes, showRes] = await Promise.all([
-            axios.get(tmdbUrl),
-            axios.get(showUrl)
-        ]);
-
-        const epData = epRes.data;
-        const showData = showRes.data;
-
-        // STEP 2: Movie-Web ka Format Taiyar Karna
+        // Media object for movie-web providers (Using IMDb to bypass India TMDB blocks)
         const media = {
             type: 'show',
-            title: showData.name,
-            releaseYear: parseInt(showData.first_air_date.split('-')[0]),
-            tmdbId: id.toString(),
-            season: {
-                number: parseInt(s),
-                tmdbId: epData.season_number.toString()
-            },
-            episode: {
-                number: parseInt(e),
-                tmdbId: epData.id.toString()
-            }
+            title: 'Friends',
+            releaseYear: 1994,
+            imdbId: imdb || "tt0108778",
+            season: { number: parseInt(s) },
+            episode: { number: parseInt(e) }
         };
 
-        console.log("[MOVIE-WEB ENGINE] Target Locked! Unleashing Providers...");
-
-        // STEP 3: Asli Scraping Shuru (Run All Scrapers)
-        let finalStream = null;
-
-        // runAll() saare scrapers ko ek sath daudata hai
-        const stream = await providers.runAll({
+        const streamRes = await providers.runAll({
             media: media,
             events: {
-                init: (evt) => console.log(`Initializing:`, evt.sourceIds),
-                start: (id) => console.log(`[ATTACK] Started scraper: ${id}`),
+                start: (id) => console.log(`[PROVIDER START] ${id}`),
                 update: (evt) => console.log(`[STATUS] ${evt.id}: ${evt.status}`),
-                discoverEmbeds: (evt) => console.log(`[EMBED FOUND] ${evt.id}`),
             }
         });
 
-        if (stream && stream.stream) {
-            console.log("[SUCCESS] Movie-Web Engine ne stream faad li!");
-            finalStream = stream.stream;
-        }
-
-        if (finalStream) {
+        if (streamRes && streamRes.stream) {
+            console.log("[SUCCESS] Stream found by Vercel backend!");
             return res.json({
                 success: true,
-                provider: "Movie-Web_Sudo-Flix",
-                stream: finalStream
+                stream: streamRes.stream
             });
         } else {
-            throw new Error("Movie-Web engine exhausted all providers. No link found.");
+            throw new Error("All providers exhausted. No streams found.");
         }
 
     } catch (error) {
-        console.error("[FATAL ERROR]", error.message);
+        console.error("[SCRAPE ERROR]", error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`CineZ Movie-Web Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });

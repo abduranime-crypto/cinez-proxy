@@ -1,77 +1,96 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const cheerio = require('cheerio'); // Yeh website ka HTML parse karega
+// Asli Sudo-Flix / Movie-Web Engine import kar rahe hain
+const { makeProviders, makeStandardFetcher } = require('@movie-web/providers');
 
 const app = express();
 app.use(cors());
 
-// THE "CASTLE-STYLE" DIRECT EXTRACTOR
-app.get('/api/extract', async (req, res) => {
-    const { id, s, e } = req.query; // TMDB ID, Season, Episode
+// Movie-Web Engine Setup
+const fetcher = makeStandardFetcher(fetch);
+const providers = makeProviders({
+    fetcher,
+    target: 'any', // Vercel (server) par chala rahe hain
+});
 
-    if (!id || !s || !e) return res.status(400).json({ error: "Parameters missing bhai" });
+app.get('/api/scrape', async (req, res) => {
+    const { id, s, e } = req.query; // example: id=1668, s=1, e=1
 
-    console.log(`[EXTRACTOR] Hunting S${s} E${e} for TMDB: ${id}`);
+    if (!id || !s || !e) {
+        return res.status(400).json({ error: "Missing id, s, or e" });
+    }
 
     try {
-        // STEP 1: Bhes Badal Kar Jana (Spoofing)
-        // Hum Vidsrc ko dikhayenge ki hum koi bot nahi, balki ek real Windows Google Chrome user hain.
-        const targetUrl = `https://vidsrc.net/embed/tv?tmdb=${id}&season=${s}&episode=${e}`;
-        
-        const response = await axios.get(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                'Referer': 'https://google.com/'
-            }
-        });
+        console.log(`[MOVIE-WEB ENGINE] Starting attack on TMDB: ${id} | S${s} E${e}`);
 
-        // STEP 2: HTML ko Cheerio (Parser) mein load karna
-        const $ = cheerio.load(response.data);
-        
-        // STEP 3: Page ke andar hidden elements dhundna
-        // Vidsrc aksar apna player ek iframe ke andar chhipata hai. Hum usko dhund rahe hain.
-        let iframeUrl = $('iframe').attr('src');
-        
-        // Agar iframe nahi mila, toh ho sakta hai unhone javascript ('token') ke andar link chhipaya ho.
-        let secretToken = null;
-        if (!iframeUrl) {
-            const pageScripts = $('script').text();
-            // Regex se token dhundne ki koshish
-            const tokenMatch = pageScripts.match(/data-hash=['"]([^'"]+)['"]/);
-            if(tokenMatch) {
-                secretToken = tokenMatch[1];
-            }
-        }
+        // STEP 1: Movie-Web ko exact IDs chahiye hoti hain. TMDB se nikalte hain.
+        // TMDB ka free API key (publicly available for scraping tools)
+        const tmdbUrl = `https://api.themoviedb.org/3/tv/${id}/season/${s}/episode/${e}?api_key=8d6d91941230817f7807d643736e8a49`;
+        const showUrl = `https://api.themoviedb.org/3/tv/${id}?api_key=8d6d91941230817f7807d643736e8a49`;
 
-        // Fix relative URLs (agar link // se shuru hota hai)
-        if (iframeUrl && iframeUrl.startsWith('//')) {
-            iframeUrl = 'https:' + iframeUrl;
-        }
+        const [epRes, showRes] = await Promise.all([
+            axios.get(tmdbUrl),
+            axios.get(showUrl)
+        ]);
 
-        // STEP 4: Asliyat dikhana
-        // Yahan par Castle jaise apps us secretToken ko decrypt (AES/RC4) karke .m3u8 nikalte hain.
-        res.json({
-            success: true,
-            message: "Scraping Operation Successful!",
-            target_hit: targetUrl,
-            extracted_data: {
-                raw_iframe: iframeUrl || "No Iframe Found",
-                encrypted_token: secretToken || "No Token Found"
+        const epData = epRes.data;
+        const showData = showRes.data;
+
+        // STEP 2: Movie-Web ka Format Taiyar Karna
+        const media = {
+            type: 'show',
+            title: showData.name,
+            releaseYear: parseInt(showData.first_air_date.split('-')[0]),
+            tmdbId: id.toString(),
+            season: {
+                number: parseInt(s),
+                tmdbId: epData.season_number.toString()
             },
-            next_step: "Is iframe ya token ko decrypt karke HLS link nikalna hoga."
+            episode: {
+                number: parseInt(e),
+                tmdbId: epData.id.toString()
+            }
+        };
+
+        console.log("[MOVIE-WEB ENGINE] Target Locked! Unleashing Providers...");
+
+        // STEP 3: Asli Scraping Shuru (Run All Scrapers)
+        let finalStream = null;
+
+        // runAll() saare scrapers ko ek sath daudata hai
+        const stream = await providers.runAll({
+            media: media,
+            events: {
+                init: (evt) => console.log(`Initializing:`, evt.sourceIds),
+                start: (id) => console.log(`[ATTACK] Started scraper: ${id}`),
+                update: (evt) => console.log(`[STATUS] ${evt.id}: ${evt.status}`),
+                discoverEmbeds: (evt) => console.log(`[EMBED FOUND] ${evt.id}`),
+            }
         });
+
+        if (stream && stream.stream) {
+            console.log("[SUCCESS] Movie-Web Engine ne stream faad li!");
+            finalStream = stream.stream;
+        }
+
+        if (finalStream) {
+            return res.json({
+                success: true,
+                provider: "Movie-Web_Sudo-Flix",
+                stream: finalStream
+            });
+        } else {
+            throw new Error("Movie-Web engine exhausted all providers. No link found.");
+        }
 
     } catch (error) {
-        console.error("[SCRAPE FAILED]", error.message);
-        res.status(500).json({ 
-            success: false, 
-            error: "Scraping Blocked! Cloudflare ne bot pakad liya ya IP ban kar di." 
-        });
+        console.error("[FATAL ERROR]", error.message);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`CineZ Direct Extractor running on port ${PORT}`);
+    console.log(`CineZ Movie-Web Server running on port ${PORT}`);
 });

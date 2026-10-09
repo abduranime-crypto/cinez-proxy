@@ -1,13 +1,15 @@
 {
-  "name": "cinez-movieweb-proxy",
-  "version": "3.0.1",
+  "name": "cinez-backend",
+  "version": "4.0.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "axios": "^1.6.2",
-    "@movie-web/providers": "latest"
+    "@movie-web/providers": "^2.0.0-beta.10"
   }
 }
